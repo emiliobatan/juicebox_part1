@@ -2,7 +2,6 @@ const { Client } = require('pg');
 const client = new Client('postgres://localhost:5432/juicebox-dev');
 
 
-
 async function getAllUsers() {
   try {
     const { rows } = await client.query(
@@ -75,47 +74,75 @@ async function createPost({
 
     const tagList = await createTags(tags)
 
-    return post;
+    return await addTagsToPost(post.id, tagList);
   } catch (error) {
     throw error;
   }
 }
 
-async function updatePost(id, fields = {}) {
+async function updatePost(postId, fields = {}) {
+  // read off the tags & remove that field 
+  const { tags } = fields; // might be undefined
+  delete fields.tags;
+
+  // build the set string
   const setString = Object.keys(fields).map(
     (key, index) => `"${ key }"=$${ index + 1 }`
   ).join(', ');
 
-  if (setString.length === 0) {
-    return;
-  }
-
   try {
-    const { rows: [ post ] } = await client.query(`
-      UPDATE posts
-      SET ${ setString }
-      WHERE id=${ id }
-      RETURNING *;
-    `, Object.values(fields));
+    // update any fields that need to be updated
+    if (setString.length > 0) {
+      await client.query(`
+        UPDATE posts
+        SET ${ setString }
+        WHERE id=${ postId }
+        RETURNING *;
+      `, Object.values(fields));
+    }
 
-    return post;
+    // return early if there's no tags to update
+    if (tags === undefined) {
+      return await getPostById(postId);
+    }
+
+    // make any new tags that need to be made
+    const tagList = await createTags(tags);
+    const tagListIdString = tagList.map(
+      tag => `${ tag.id }`
+    ).join(', ');
+
+    // delete any post_tags from the database which aren't in that tagList
+    await client.query(`
+      DELETE FROM post_tags
+      WHERE "tagId"
+      NOT IN (${ tagListIdString })
+      AND "postId"=$1;
+    `, [postId]);
+
+    // and create post_tags as necessary
+    await addTagsToPost(postId, tagList);
+
+    return await getPostById(postId);
   } catch (error) {
     throw error;
   }
 }
 
-async function getAllPosts() {
+const getAllPosts = async () => {
   try {
-    const { rows } = await client.query(`
-      SELECT *
+    const { rows: postIds } = await client.query(`
+      SELECT id
       FROM posts;
     `);
-
-    return rows;
+    const posts = await Promise.all(postIds.map(
+      post => getPostById( post.id )
+    ));
+    return posts;
   } catch (error) {
-    throw error;
+    console.error(error);
   }
-}
+};
 
 
 async function getPostsByUser(userId) {
@@ -125,6 +152,11 @@ async function getPostsByUser(userId) {
       FROM posts
       WHERE "authorId"=${ userId };
     `);
+
+    const posts = await Promise.all(postIds.map(
+      post => getPostById( post.id )
+    ));
+
 
     return rows;
   } catch (error) {
@@ -153,36 +185,34 @@ async function getUserById(userId) {
 }
 
 async function createTags(tagList) {
-  if (tagList.length === 0) { 
-    return; 
+  if (tagList.length === 0) {
+    return;
   }
-  const {name} = tagList
-  // need something like: $1), ($2), ($3 
-  const insertValues = tagList.map(
-    (_, index) => `$${index + 1}`).join('), (');
-  // then we can use: (${ insertValues }) in our string template
 
-  // need something like $1, $2, $3
-  const selectValues = tagList.map(
-    (_, index) => `$${index + 1}`).join(', ');
-  // then we can use (${ selectValues }) in our string template
+  const valuesStringInsert = tagList.map(
+    (_, index) => `$${index + 1}`
+  ).join('), (');
+
+  const valuesStringSelect = tagList.map(
+    (_, index) => `$${index + 1}`
+  ).join(', ');
 
   try {
-    // insert the tags, doing nothing on conflict
-    // returning nothing, we'll query after
-      await client.query(`
+    // insert all, ignoring duplicates
+    await client.query(`
       INSERT INTO tags(name)
-      VALUES (${insertValues});
-      `,tagList);
+      VALUES (${ valuesStringInsert })
+      ON CONFLICT (name) DO NOTHING;
+    `, tagList);
 
-      const {rows} = await client.query(`
+    // grab all and return
+    const { rows } = await client.query(`
       SELECT * FROM tags
-      WHERE (name) IN (${selectValues});`, tagList)
+      WHERE name
+      IN (${ valuesStringSelect });
+    `, tagList);
 
-      return rows
-
-    // select all tags where the name is in our taglist
-    // return the rows from the query
+    return rows;
   } catch (error) {
     throw error;
   }
@@ -209,10 +239,21 @@ async function createPostTag(postId, tagId) {
       );
   
       await Promise.all(createPostTagPromises);
-  
-      console.log("FINISHEDD--=-----a---")
 
       return await getPostById(postId);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async function getAllTags() {
+    try {
+      const { rows } = await client.query(`
+        SELECT * 
+        FROM tags;
+      `);
+  
+      return { rows }
     } catch (error) {
       throw error;
     }
@@ -270,18 +311,18 @@ async function getPostsByTagName(tagName) {
 } 
 
 module.exports = {
-    client,
-    getAllUsers,
-    createUser,
-    updateUser,
-    createPost, 
-    updatePost, 
-    getAllPosts, 
-    getPostsByUser,
-    getUserById,
-    createTags,
-    createPostTag,
-    addTagsToPost,
-    getPostById,
-    getPostsByTagName
+  client,
+  createUser,
+  updateUser,
+  getAllUsers,
+  getUserById,
+  createPost,
+  updatePost,
+  getAllPosts,
+  getPostsByUser,
+  getPostsByTagName,
+  createTags,
+  getAllTags,
+  createPostTag,
+  addTagsToPost
 }

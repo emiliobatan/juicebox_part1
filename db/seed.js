@@ -1,4 +1,4 @@
-const { 
+const {  
   client,
   createUser,
   updateUser,
@@ -7,9 +7,7 @@ const {
   createPost,
   updatePost,
   getAllPosts,
-  getPostsByUser,
-  createTags,
-  addTagsToPost,
+  getAllTags,
   getPostsByTagName
 } = require('./index');
 
@@ -160,6 +158,10 @@ async function testDB() {
     const albert = await getUserById(1);
     console.log("Result:", albert);
 
+    console.log("Calling getAllTags");
+    const allTags = await getAllTags();
+    console.log("Result:", allTags);
+    
     console.log("Calling getPostsByUser with User 1");
     const albertPosts = await getPostsByUser(1);
     console.log("Result:", albertPosts);
